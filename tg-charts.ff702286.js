@@ -7,4 +7,4 @@ module.exports=[{columns:[["x",15424128e5,15424992e5,15425856e5,1542672e6,154275
 },{}],"Focm":[function(require,module,exports) {
 "use strict";var e=t(require("./data/chart_data.json"));require("./src/app.css");var r=require("./src/app");function t(e){return e&&e.__esModule?e:{default:e}}(0,r.init)(document.getElementById("root"),e.default[4]);
 },{"./data/chart_data.json":"TF5d","./src/app.css":"WjnD","./src/app":"vZyd"}]},{},["Focm"], null)
-//# sourceMappingURL=/tg-charts.ff702286.js.map
+//# sourceMappingURL=tg-charts.ff702286.js.map
