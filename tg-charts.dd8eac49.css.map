@@ -1,0 +1,1 @@
+{"version":3,"sources":["app.css"],"names":[],"mappings":"AAAA,gBAGE,UAAW,CACX,WAAY,CACZ,QAAS,CACT,SACF","file":"tg-charts.dd8eac49.css","sourceRoot":"..","sourcesContent":["html,\nbody,\n#root {\n  width: 100%;\n  height: 100%;\n  margin: 0;\n  padding: 0;\n}\n"]}
