@@ -1,13 +1,11 @@
 export function init (node, data) {
-  const domState = {
+  const state = {
+    ...getInitialState(data),
     width: node.offsetWidth,
     chartsHeight: Math.min(node.offsetWidth / 1.5, node.offsetHeight / 2)
   }
-  const state = getInitialState(data)
 
-  const model = render(state, domState)
-
-  const [html, subs] = view(model, domState)
+  const [html, subs] = view(state)
   node.innerHTML = html
 
   const listeners = {
@@ -20,78 +18,89 @@ export function init (node, data) {
 
   Object.keys(listeners).forEach(event => {
     node.addEventListener(event, e => {
-      const { handler } = listeners[event].find(({ id }) => id === e.target.id)
+      const { message } = listeners[event].find(({ id }) => id === e.target.id) || {}
 
-      if (handler) {
-        handler(patch)
+      if (message) {
+        patch(message)
       }
     })
   })
 
-  function patch (update) {
-    Object.assign(state, update(state))
+  function patch (message) {
+    Object.assign(state, update(state, message))
 
-    const model = render(state, domState)
-
-    const [html] = view(model, domState)
+    const [html] = view(state)
     node.innerHTML = html
   }
 }
 
-function view (model, domState) {
+function update (state, message) {
+  const { type, payload } = message
+
+  switch (type) {
+    case TOGGLE_CHART: {
+      const id = payload
+
+      return {
+        visibleChartIds: state.visibleChartIds.includes(id)
+          ? state.visibleChartIds.filter(vId => vId !== id)
+          : state.visibleChartIds.concat(id)
+      }
+    }
+  }
+
+  throw new Error(`Unexpected message: ${message.type}`)
+}
+
+function view (state) {
   const { unwrap, wrap } = v()
 
   const html = `
     <div>
-      ${unwrap(viewCharts(model, domState))}
-      ${unwrap(viewButtons(model))}
+      ${unwrap(viewCharts(state))}
+      ${unwrap(viewButtons(state))}
     </div>
   `
 
   return wrap(html)
 }
 
-function viewCharts ({ charts }, { width, chartsHeight }) {
+function viewCharts (state) {
+  const width = getChartsWidth(state)
+  const height = getChartsHeight(state)
+  const charts = getVisibleCharts(state)
+
   return `
     <div class="charts">
-      <svg width="${width}" height="${chartsHeight}" viewBox="0 -${chartsHeight} ${width} ${chartsHeight}">
-        ${charts.map(viewPolyline).join('')}
+      <svg width="${width}" height="${height}" viewBox="0 -${height} ${width} ${height}">
+        ${charts.map(c => viewPolyline(state, c)).join('')}
       </svg>
     </div>
   `
 }
 
-function viewPolyline ({ id, points, color }) {
+function viewPolyline (state, { id, values, color }) {
+  const timeline = getScaledTimeline(state)
+  const scale = getValuesScaler(state)
+  const points = timeline.map((t, i) => `${t},-${scale(values[i])}`).join(' ')
+
   return `
     <polyline points="${points}" fill="none" stroke="${color}" id="${id}" />
   `
 }
 
-function viewButtons ({ buttons }) {
+function viewButtons (state) {
   const { wrap } = v()
-
+  const charts = getCharts(state)
   const getId = id => `${id}-button`
 
   const html = `
       <div>
-        ${buttons
-    .map(
-      ({ name, color, id }) =>
-        `<button id="${getId(id)}">${name}</button>`
-    )
-    .join('')}
+        ${charts.map(({ name, color, id }) => `<button id="${getId(id)}">${name}</button>`).join('')}
       </div>
     `
 
-  const subs = buttons.map(({ id }) =>
-    onClickSub(getId(id), patch =>
-      patch(state => ({
-        visibleChartIds: state.visibleChartIds.includes(id)
-          ? state.visibleChartIds.filter(vId => vId !== id)
-          : state.visibleChartIds.concat(id)
-      }))
-    )
-  )
+  const subs = charts.map(({ id }) => onClick(getId(id), message(TOGGLE_CHART, id)))
 
   return wrap(html, subs)
 }
@@ -115,13 +124,22 @@ function v () {
   }
 }
 
-function onClickSub (id, handler) {
+function onClick (id, message) {
   return {
     id,
-    handler,
+    message,
     event: 'click'
   }
 }
+
+function message (type, payload) {
+  return {
+    type,
+    payload
+  }
+}
+
+const TOGGLE_CHART = 'TOGGLE_CHART'
 
 function getInitialState (data) {
   const TIMELINE_ID = 'x'
@@ -149,52 +167,26 @@ function getInitialState (data) {
   }
 }
 
-function render (
-  { timeline, charts, visibleChartIds, visibleRange },
-  { width, chartsHeight }
-) {
-  const visibleCharts = getVisibleCharts(charts, visibleChartIds)
+const getCharts = state => state.charts
+const getTimeline = state => state.timeline
+const getVisibleChartIds = state => state.visibleChartIds
+const getVisibleRange = state => state.visibleRange
+const getChartsHeight = state => state.chartsHeight
+const getChartsWidth = state => state.width
 
-  const scaleValues = createScaler(getBoundaries(visibleCharts), [
-    0,
-    chartsHeight
-  ])
-  const scaleTimeline = createScaler(
-    [timeline[visibleRange[0]], timeline[visibleRange[1]]],
-    [0, width]
-  )
+const getVisibleCharts = selector([getCharts, getVisibleChartIds], (charts, visibleChartIds) =>
+  charts.filter(({ id }) => visibleChartIds.includes(id))
+)
 
-  const scaledTimeline = timeline.map(scaleTimeline)
+const getValuesScaler = selector([getVisibleCharts, getChartsHeight], (charts, height) =>
+  createScaler(getBoundaries(charts), [0, height])
+)
 
-  return {
-    charts: visibleCharts.map(c =>
-      renderPolyline({ ...c, timeline: scaledTimeline, scale: scaleValues })
-    ),
-    buttons: charts.map(c => renderButton({ ...c, visibleChartIds }))
-  }
-}
+const getTimelineScaler = selector([getTimeline, getVisibleRange, getChartsWidth], (timeline, range, width) =>
+  createScaler([timeline[range[0]], timeline[range[1]]], [0, width])
+)
 
-function renderPolyline ({ id, name, values, color, scale, timeline }) {
-  return {
-    points: timeline.map((t, i) => `${t},-${scale(values[i])}`).join(' '),
-    color,
-    id,
-    name
-  }
-}
-
-function renderButton ({ id, name, color, visibleChartIds }) {
-  return {
-    id,
-    name,
-    color,
-    isChecked: visibleChartIds.includes(id)
-  }
-}
-
-function getVisibleCharts (charts, visibleChartIds) {
-  return charts.filter(({ id }) => visibleChartIds.includes(id))
-}
+const getScaledTimeline = selector([getTimeline, getTimelineScaler], (timeline, scale) => timeline.map(scale))
 
 function getBoundaries (charts) {
   let min = Number.MAX_VALUE
@@ -221,5 +213,36 @@ function createScaler (range, newRange) {
 
   return function (x) {
     return (x + offset) * coef
+  }
+}
+
+function selector (deps, f) {
+  let cache
+  let prevArgs
+
+  return function (state) {
+    const args = deps.map(d => d(state))
+
+    if (prevArgs && prevArgs.every((a, i) => a === args[i])) {
+      return cache
+    }
+
+    prevArgs = args
+    cache = f(...args)
+
+    return cache
+  }
+}
+
+// eslint-disable-next-line
+function tap (name) {
+  return function (f) {
+    return function (...args) {
+      console.log(name)
+      console.log('Args:', args)
+      const res = f(...args)
+      console.log('Res:', res)
+      return res
+    }
   }
 }
