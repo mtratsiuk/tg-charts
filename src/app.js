@@ -27,10 +27,15 @@ export function init (node, data) {
   })
 
   function patch (message) {
-    Object.assign(state, update(state, message))
+    const [slice, effect] = update(state, message)
+    Object.assign(state, slice)
 
     const [html] = view(state)
     node.innerHTML = html
+
+    if (effect) {
+      effect(patch)
+    }
   }
 }
 
@@ -41,11 +46,50 @@ function update (state, message) {
     case TOGGLE_CHART: {
       const id = payload
 
-      return {
-        visibleChartIds: state.visibleChartIds.includes(id)
-          ? state.visibleChartIds.filter(vId => vId !== id)
-          : state.visibleChartIds.concat(id)
+      const nextVisibleChartIds = state.visibleChartIds.includes(id)
+        ? state.visibleChartIds.filter(vId => vId !== id)
+        : state.visibleChartIds.concat(id)
+
+      const shouldAnimate = nextVisibleChartIds.length !== 0 && state.visibleChartIds.length !== 0
+
+      const slice = {
+        visibleChartIds: nextVisibleChartIds,
+        transition: shouldAnimate
+          ? {
+            progress: 0,
+            initialRange: getBoundaries(getVisibleCharts(state))
+          }
+          : null
       }
+
+      const effect = shouldAnimate
+        ? patch => {
+          window.requestAnimationFrame(time => patch(createMessage(TOGGLE_CHART_STEP, { start: time, time })))
+        }
+        : null
+
+      return [slice, effect]
+    }
+
+    case TOGGLE_CHART_STEP: {
+      const TRANSITION_TIME = 500
+      const { start, time } = payload
+
+      const progress = Math.min((time - start) / TRANSITION_TIME, 1)
+
+      const slice = {
+        transition: {
+          ...state.transition,
+          progress
+        }
+      }
+
+      const effect =
+        progress === 1
+          ? null
+          : patch => window.requestAnimationFrame(time => patch(createMessage(TOGGLE_CHART_STEP, { start, time })))
+
+      return [slice, effect]
     }
   }
 
@@ -100,7 +144,7 @@ function viewButtons (state) {
       </div>
     `
 
-  const subs = charts.map(({ id }) => onClick(getId(id), message(TOGGLE_CHART, id)))
+  const subs = charts.map(({ id }) => onClick(getId(id), createMessage(TOGGLE_CHART, id)))
 
   return wrap(html, subs)
 }
@@ -132,7 +176,7 @@ function onClick (id, message) {
   }
 }
 
-function message (type, payload) {
+function createMessage (type, payload) {
   return {
     type,
     payload
@@ -140,6 +184,7 @@ function message (type, payload) {
 }
 
 const TOGGLE_CHART = 'TOGGLE_CHART'
+const TOGGLE_CHART_STEP = 'TOGGLE_CHART_STEP'
 
 function getInitialState (data) {
   const TIMELINE_ID = 'x'
@@ -173,14 +218,27 @@ const getVisibleChartIds = state => state.visibleChartIds
 const getVisibleRange = state => state.visibleRange
 const getChartsHeight = state => state.chartsHeight
 const getChartsWidth = state => state.width
+const getTransition = state => state.transition
 
 const getVisibleCharts = selector([getCharts, getVisibleChartIds], (charts, visibleChartIds) =>
   charts.filter(({ id }) => visibleChartIds.includes(id))
 )
 
-const getValuesScaler = selector([getVisibleCharts, getChartsHeight], (charts, height) =>
-  createScaler(getBoundaries(charts), [0, height])
-)
+const getValuesScaler = selector([getVisibleCharts, getChartsHeight, getTransition], (charts, height, transition) => {
+  if (!transition) {
+    return createScaler(getBoundaries(charts), [0, height])
+  }
+
+  const { initialRange, progress } = transition
+  const targetRange = getBoundaries(charts)
+
+  const range = [
+    initialRange[0] + (targetRange[0] - initialRange[0]) * progress,
+    initialRange[1] + (targetRange[1] - initialRange[1]) * progress
+  ]
+
+  return createScaler(range, [0, height])
+})
 
 const getTimelineScaler = selector([getTimeline, getVisibleRange, getChartsWidth], (timeline, range, width) =>
   createScaler([timeline[range[0]], timeline[range[1]]], [0, width])
@@ -212,7 +270,7 @@ function createScaler (range, newRange) {
   const offset = newRange[0] - range[0]
 
   return function (x) {
-    return (x + offset) * coef
+    return Math.max((x + offset) * coef, 0)
   }
 }
 
